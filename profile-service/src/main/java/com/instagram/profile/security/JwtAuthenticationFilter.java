@@ -8,19 +8,16 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.web.filter.OncePerRequestFilter;
+import org.springframework.security.core.userdetails.User;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework. web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
 
 /**
- * ✅ JWT filter for Profile Service
- *
- * Differences from Identity Service:
- *  - NO blacklist check (stateless)
- *  - NO user loading from DB
- *  - ONLY token verification
+ * ✅ FIXED: Properly sets UserDetails as principal
  */
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
@@ -36,7 +33,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getServletPath();
         // Public endpoints don't need authentication
-        return path.startsWith("/profiles/") && request.getMethod().equals("GET");
+        return path.matches("/profiles/[^/]+") && request.getMethod().equals("GET");
     }
 
     @Override
@@ -50,11 +47,18 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             if (token != null && jwtVerifier.validateToken(token)) {
                 String username = jwtVerifier.getUsername(token);
 
+                // ✅ FIXED: Create proper UserDetails object
+                UserDetails userDetails = User.builder()
+                        .username(username)
+                        .password("") // Not used - just for UserDetails interface
+                        .authorities(new SimpleGrantedAuthority("ROLE_USER"))
+                        .build();
+
                 UsernamePasswordAuthenticationToken auth =
                         new UsernamePasswordAuthenticationToken(
-                                username,
+                                userDetails,  // ✅ FIXED:  UserDetails object, not just String
                                 null,
-                                List.of(new SimpleGrantedAuthority("ROLE_USER"))
+                                userDetails.getAuthorities()
                         );
 
                 SecurityContextHolder.getContext().setAuthentication(auth);
@@ -64,18 +68,28 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             SecurityContextHolder.clearContext();
         }
 
-        filterChain. doFilter(request, response);
+        filterChain.doFilter(request, response);
     }
 
+    /**
+     * ✅ HYBRID: Extract from Bearer header OR cookie
+     */
     private String extractToken(HttpServletRequest request) {
-        if (request.getCookies() == null) {
-            return null;
+        // Try Bearer token first
+        String authHeader = request.getHeader("Authorization");
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            return authHeader.substring(7);
         }
 
-        return Arrays.stream(request.getCookies())
-                .filter(cookie -> ACCESS_TOKEN_COOKIE.equals(cookie.getName()))
-                .map(Cookie::getValue)
-                .findFirst()
-                .orElse(null);
+        // Fallback to cookie
+        if (request.getCookies() != null) {
+            return Arrays.stream(request.getCookies())
+                    .filter(cookie -> ACCESS_TOKEN_COOKIE.equals(cookie.getName()))
+                    . map(Cookie::getValue)
+                    .findFirst()
+                    .orElse(null);
+        }
+
+        return null;
     }
 }

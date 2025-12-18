@@ -1,19 +1,16 @@
 package com.instagram.profile.controller;
 
-import com.instagram.profile.dto.ProfileResponse;
-import com.instagram. profile.dto.UpdateProfileRequest;
-import com.instagram.profile. service.ProfileService;
+import com.instagram.profile. dto.ProfileResponse;
+import com. instagram.profile.dto.UpdateProfileRequest;
+import com.instagram.profile.service.ProfileService;
 import jakarta.validation.Valid;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security. core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 
 /**
- * INSTAGRAM-STYLE Profile Controller
- *
- * Endpoints:
- *  GET  /profiles/{username}  - Public (with privacy)
- *  GET  /profiles/me          - Authenticated (owner)
- *  PUT  /profiles/me          - Authenticated (owner)
+ * ✅ FIXED: Extract username properly from UserDetails
  */
 @RestController
 @RequestMapping("/profiles")
@@ -28,20 +25,21 @@ public class ProfileController {
 
     /**
      * PUBLIC ENDPOINT:  View any user's profile
-     *
-     * Behavior:
-     *  - Public account → full profile
-     *  - Private account → limited info
-     *
-     * Does NOT throw 403 for private profiles.
      */
     @GetMapping("/{username}")
     public ProfileResponse getProfile(
-            @PathVariable String username,
-            @AuthenticationPrincipal String viewerUsername) {
+            @PathVariable("username") String username,
+            Authentication authentication) {  // ✅ Use Authentication instead
 
-        // viewerUsername is null if not authenticated
-        String viewerId = viewerUsername != null ? viewerUsername : null;
+        String viewerId = null;
+        if (authentication != null && authentication.isAuthenticated()) {
+            Object principal = authentication.getPrincipal();
+            if (principal instanceof UserDetails) {
+                viewerId = ((UserDetails) principal).getUsername();
+            } else if (principal instanceof String) {
+                viewerId = (String) principal;
+            }
+        }
 
         return profileService.getProfileByUsername(username, viewerId);
     }
@@ -49,29 +47,25 @@ public class ProfileController {
     /**
      * AUTHENTICATED ENDPOINT: Get own profile
      *
-     * Auto-creates profile if missing.
+     * ✅ FIXED: Extract username from UserDetails
      */
     @GetMapping("/me")
-    public ProfileResponse getMyProfile(@AuthenticationPrincipal String username) {
-        // In real implementation, extract userId from JWT claims
-        // For now, using username as userId (Identity Service does this)
-        return profileService. getMyProfile(username, username);
+    public ProfileResponse getMyProfile(@AuthenticationPrincipal UserDetails userDetails) {
+        String username = userDetails.getUsername();
+        return profileService.getMyProfile(username, username);
     }
 
     /**
      * AUTHENTICATED ENDPOINT: Update own profile
      *
-     * Allowed updates:
-     *  - fullName
-     *  - bio
-     *  - profilePictureUrl
-     *  - privateAccount
+     * ✅ FIXED: Extract username from UserDetails
      */
     @PutMapping("/me")
     public ProfileResponse updateMyProfile(
-            @AuthenticationPrincipal String username,
+            @AuthenticationPrincipal UserDetails userDetails,
             @Valid @RequestBody UpdateProfileRequest request) {
 
-        return profileService.updateMyProfile(username, request);
+        String username = userDetails.getUsername();
+        return profileService. updateMyProfile(username, request);
     }
 }

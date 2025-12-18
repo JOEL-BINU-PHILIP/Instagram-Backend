@@ -1,19 +1,21 @@
-package com.instagram.identity.controller;
+package com. instagram.identity.controller;
 
-import com.instagram.identity.model.RefreshToken;
+import com.instagram.identity.model. RefreshToken;
 import com.instagram.identity.model.Role;
 import com.instagram.identity.model.User;
 import com.instagram.identity.dto.LoginRequest;
-import com.instagram. identity.dto.RegisterRequest;
+import com. instagram.identity.dto.RegisterRequest;
 import com.instagram. identity.security.JwtProvider;
 import com.instagram.identity.service.RefreshTokenService;
-import com.instagram.identity. service.TokenBlacklistService;
+import com. instagram.identity.service.TokenBlacklistService;
 import com. instagram.identity.service.UserService;
-import com.instagram.identity.util.CookieUtil;
+import com. instagram.identity.util.CookieUtil;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
-import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseEntity;
+import org.springframework. security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -21,6 +23,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 
 @RestController
 @RequestMapping("/auth")
@@ -55,7 +58,7 @@ public class AuthController {
                 request.email(),
                 request.password(),
                 request.fullName(),
-                request.accountType()  // This can be null, defaults to PERSONAL
+                request.accountType()
         );
 
         Map<String, String> response = new HashMap<>();
@@ -65,35 +68,34 @@ public class AuthController {
     }
 
     /**
-     * ✅ INSTAGRAM-STYLE LOGIN
+     * ✅ HYBRID LOGIN
      *
-     * Changes:
-     *  1. Reject suspended users BEFORE issuing tokens
-     *  2. Reject login-restricted users
-     *  3. Record last login timestamp
-     *  4. Return suspension reason if applicable
+     * Returns:
+     *  1. JWT tokens in response body (for Bearer auth)
+     *  2. JWT tokens in cookies (for cookie-based auth)
+     *
+     * Clients can choose which method to use.
      */
     @PostMapping("/login")
-    public Map<String, Object> login(@Valid @RequestBody LoginRequest request,
-                                     HttpServletRequest httpRequest,
-                                     HttpServletResponse response) throws Exception {
+    public ResponseEntity<Map<String, Object>> login(@Valid @RequestBody LoginRequest request,
+                                                     HttpServletRequest httpRequest,
+                                                     HttpServletResponse response) throws Exception {
 
-        // ✅ STEP 1: Fetch user first to check flags
+        // ✅ STEP 1: Fetch user and check account status
         User user = userService. findByUsername(request.username())
                 .orElseThrow(() -> new RuntimeException("Invalid username or password"));
 
-        // ✅ STEP 2: Check if user CAN authenticate
         if (user.isSuspended()) {
-            String reason = user.getSuspensionReason() != null
+            String reason = user. getSuspensionReason() != null
                     ? user.getSuspensionReason()
                     : "Your account has been suspended";
 
             Map<String, Object> error = new HashMap<>();
-            error.put("error", "account_suspended");
+            error. put("error", "account_suspended");
             error.put("message", reason);
 
             if (user.getSuspensionExpiresAt() != null) {
-                error. put("expiresAt", user.getSuspensionExpiresAt().toString());
+                error.put("expiresAt", user.getSuspensionExpiresAt().toString());
             }
 
             throw new RuntimeException(error.toString());
@@ -103,7 +105,7 @@ public class AuthController {
             throw new RuntimeException("Login restricted - please verify your identity via email");
         }
 
-        // ✅ STEP 3: NOW authenticate credentials
+        // ✅ STEP 2:  Authenticate credentials
         Authentication authentication = authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(
                         request.username(),
@@ -113,7 +115,7 @@ public class AuthController {
 
         SecurityContextHolder.getContext().setAuthentication(authentication);
 
-        // ✅ STEP 4: Generate tokens
+        // ✅ STEP 3: Generate tokens
         String accessToken = jwtProvider.generateAccessToken(user);
 
         String ipAddress = getClientIP(httpRequest);
@@ -121,6 +123,7 @@ public class AuthController {
 
         RefreshToken refreshToken = refreshTokenService.createToken(user, ipAddress, userAgent);
 
+        // ✅ STEP 4: Set cookies (for web browsers)
         response.addCookie(cookieUtil.createAccessTokenCookie(accessToken, 15 * 60));
         response.addCookie(cookieUtil.createRefreshTokenCookie(
                 refreshToken.getTokenHash(),
@@ -130,7 +133,7 @@ public class AuthController {
         // ✅ STEP 5: Record login
         userService.recordLogin(user.getId());
 
-        // ✅ STEP 6: Return user info
+        // ✅ STEP 6: Return tokens in response body (for Bearer auth)
         Map<String, Object> result = new HashMap<>();
         result.put("message", "Login successful");
         result.put("username", user.getUsername());
@@ -138,57 +141,83 @@ public class AuthController {
         result.put("verified", user.isVerified());
         result.put("roles", user.getRoles().stream().map(Role::getName).toList());
 
-        return result;
+        // ✅ Include tokens in response body for mobile/API clients
+        result.put("accessToken", accessToken);
+        result.put("refreshToken", refreshToken.getTokenHash());
+        result.put("expiresIn", 15 * 60); // seconds
+
+        return ResponseEntity.ok()
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken) // ✅ Also in header
+                .body(result);
     }
 
     /**
-     * ✅ FIXED: Use getTokenHash() instead of getToken()
+     * ✅ HYBRID REFRESH TOKEN
      */
     @PostMapping("/refresh")
-    public Map<String, String> refreshToken(HttpServletRequest request,
-                                            HttpServletResponse response) throws Exception {
+    public ResponseEntity<Map<String, Object>> refreshToken(HttpServletRequest request,
+                                                            HttpServletResponse response) throws Exception {
 
-        String oldRefreshToken = cookieUtil.getRefreshToken(request)
-                .orElseThrow(() -> new RuntimeException("Refresh token not found"));
+        // ✅ Try to get refresh token from cookie OR body
+        String oldRefreshToken = extractRefreshToken(request);
 
-        // ✅ Rotate token (validates and creates new one)
-        RefreshToken newRefreshToken = refreshTokenService.rotateToken(oldRefreshToken);
+        if (oldRefreshToken == null) {
+            throw new RuntimeException("Refresh token not found");
+        }
+
+        // ✅ Rotate token
+        RefreshToken newRefreshToken = refreshTokenService. rotateToken(oldRefreshToken);
 
         User user = userService.findById(newRefreshToken.getUserId())
                 .orElseThrow(() -> new RuntimeException("User not found"));
 
-        String newAccessToken = jwtProvider. generateAccessToken(user);
+        String newAccessToken = jwtProvider.generateAccessToken(user);
 
-        // ✅ FIXED: Use getTokenHash() - service returns raw token here
-        response.addCookie(cookieUtil.createAccessTokenCookie(newAccessToken, 15 * 60));
+        // ✅ Set cookies (for web browsers)
+        response.addCookie(cookieUtil. createAccessTokenCookie(newAccessToken, 15 * 60));
         response.addCookie(cookieUtil.createRefreshTokenCookie(
-                newRefreshToken.getTokenHash(),  // ✅ FIXED - contains raw token
+                newRefreshToken.getTokenHash(),
                 14 * 24 * 60 * 60
         ));
 
-        Map<String, String> result = new HashMap<>();
+        // ✅ Return tokens in response body (for mobile/API clients)
+        Map<String, Object> result = new HashMap<>();
         result.put("message", "Tokens refreshed successfully");
-        return result;
+        result.put("accessToken", newAccessToken);
+        result.put("refreshToken", newRefreshToken.getTokenHash());
+        result.put("expiresIn", 15 * 60);
+
+        return ResponseEntity.ok()
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + newAccessToken)
+                .body(result);
     }
 
+    /**
+     * ✅ HYBRID LOGOUT
+     */
     @PostMapping("/logout")
     public Map<String, String> logout(HttpServletRequest request,
                                       HttpServletResponse response) {
 
         try {
-            cookieUtil.getAccessToken(request).ifPresent(accessToken -> {
-                try {
-                    blacklistService.blacklistToken(
-                            accessToken,
-                            jwtProvider.getExpiryTimeFromToken(accessToken)
-                    );
-                } catch (Exception e) {
-                    // Continue logout even if blacklist fails
-                }
-            });
+            // ✅ Try cookie first, then Bearer token
+            String accessToken = cookieUtil.getAccessToken(request)
+                    .or(() -> Optional.ofNullable(extractBearerToken(request)))
+                    .orElse(null);
 
-            cookieUtil.getRefreshToken(request).ifPresent(refreshTokenService::revokeToken);
+            if (accessToken != null) {
+                blacklistService.blacklistToken(
+                        accessToken,
+                        jwtProvider.getExpiryTimeFromToken(accessToken)
+                );
+            }
 
+            String refreshToken = extractRefreshToken(request);
+            if (refreshToken != null) {
+                refreshTokenService.revokeToken(refreshToken);
+            }
+
+            // ✅ Delete cookies
             response.addCookie(cookieUtil.deleteCookie(CookieUtil.ACCESS_TOKEN_COOKIE));
             response.addCookie(cookieUtil.deleteCookie(CookieUtil.REFRESH_TOKEN_COOKIE));
 
@@ -203,22 +232,56 @@ public class AuthController {
         return result;
     }
 
-    @GetMapping("/blacklist/stats")
-    public Map<String, Object> getBlacklistStats() {
-        Map<String, Object> stats = new HashMap<>();
-        stats.put("blacklistedTokens", blacklistService. getBlacklistSize());
-        stats.put("message", "Token blacklist statistics");
-        return stats;
+    /**
+     * Helper:  Extract refresh token from cookie OR request body
+     */
+    private String extractRefreshToken(HttpServletRequest request) {
+        // Try cookie first
+        Optional<String> cookieToken = cookieUtil.getRefreshToken(request);
+        if (cookieToken.isPresent()) {
+            return cookieToken.get();
+        }
+
+        // Try request body (for mobile clients)
+        try {
+            String body = request.getReader().lines()
+                    .reduce("", (accumulator, actual) -> accumulator + actual);
+
+            // Simple JSON parsing (in production, use Jackson)
+            if (body.contains("refreshToken")) {
+                return body. split("\"refreshToken\"\\s*:\\s*\"")[1].split("\"")[0];
+            }
+        } catch (Exception e) {
+            // Ignore
+        }
+
+        return null;
     }
 
     /**
-     * ✅ Helper method to extract real client IP
+     * Helper: Extract Bearer token from Authorization header
+     */
+    private String extractBearerToken(HttpServletRequest request) {
+        String authHeader = request.getHeader("Authorization");
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            return authHeader. substring(7);
+        }
+        return null;
+    }
+
+    /**
+     * Helper: Get client IP address
      */
     private String getClientIP(HttpServletRequest request) {
         String xfHeader = request.getHeader("X-Forwarded-For");
-        if (xfHeader != null && !xfHeader.isEmpty()) {
+        if (xfHeader != null && ! xfHeader.isEmpty()) {
             return xfHeader.split(",")[0].trim();
         }
         return request.getRemoteAddr();
+    }
+
+    // ✅ Add Optional import at the top
+    private java.util.Optional<String> Optional(String s) {
+        return java.util.Optional.ofNullable(s);
     }
 }

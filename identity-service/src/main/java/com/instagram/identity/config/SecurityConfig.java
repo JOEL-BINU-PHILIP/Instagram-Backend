@@ -1,26 +1,22 @@
 package com.instagram.identity.config;
 
 import com.instagram.identity.repository.UserRepository;
-import com.instagram.identity.security.CsrfCookieFilter;
-import com. instagram.identity.security.CustomUserDetailsService;
-import com. instagram.identity.security.JwtAuthenticationFilter;
-import com. instagram.identity.security.JwtProvider;
-import com.instagram. identity.service.TokenBlacklistService;
-import com.instagram.identity.util.CookieUtil;
+import com.instagram.identity.security.CustomUserDetailsService;
+import com.instagram.identity.security.JwtAuthenticationFilter;
+import com.instagram.identity.security.JwtProvider;
+import com.instagram.identity.service.TokenBlacklistService;
+import com. instagram.identity.util.CookieUtil;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.AuthenticationProvider;
 import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
-import org.springframework.security.config. Customizer;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
-import org.springframework.security.crypto. password. PasswordEncoder;
+import org.springframework.security.crypto. password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
-import org.springframework. security.web.authentication.UsernamePasswordAuthenticationFilter;
-import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
-import org.springframework.security. web.csrf.CsrfTokenRequestAttributeHandler;
+import org. springframework.security.web.authentication. UsernamePasswordAuthenticationFilter;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -28,13 +24,21 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import java.util.List;
 
 /**
- * UPGRADED: Instagram-style security configuration.
+ * ✅ HYBRID SECURITY:  Supports both Cookie-based and Bearer token authentication
  *
- * Key changes:
- *  1. CSRF protection enabled (cookie-based)
- *  2.  CORS configured for credentials (cookies)
- *  3. JWT filter reads from cookies
- *  4. Stateless session management preserved
+ * Cookie-based (Web):
+ *  - Tokens stored in HttpOnly cookies
+ *  - Automatic CSRF protection via SameSite
+ *  - Best for web browsers
+ *
+ * Bearer token (Mobile/API):
+ *  - Tokens sent in Authorization header
+ *  - Easier for mobile apps and API clients
+ *  - Better for Postman testing
+ *
+ * CSRF:  DISABLED
+ *  - Cookie-based auth protected by SameSite attribute
+ *  - Bearer tokens don't need CSRF protection
  */
 @Configuration
 public class SecurityConfig {
@@ -67,29 +71,26 @@ public class SecurityConfig {
 
     @Bean
     public AuthenticationManager authenticationManager(AuthenticationConfiguration config) throws Exception {
-        return config. getAuthenticationManager();
+        return config.getAuthenticationManager();
     }
 
     /**
-     * ✅ CORS configuration that allows credentials (cookies).
-     *
-     * CRITICAL for cookie-based auth:
-     *  - allowCredentials = true
-     *  - allowedOrigins must be specific (cannot use "*")
+     * ✅ CORS configuration for cookie-based auth
      */
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
 
-        // ✅ Allow specific origins (NOT "*" when using credentials)
-        config.setAllowedOrigins(List.of("http://localhost:3000", "https://yourdomain.com"));
+        config.setAllowedOrigins(List.of(
+                "http://localhost:3000",    // React dev server
+                "http://localhost:5173",    // Vite dev server
+                "https://yourdomain.com"    // Production
+        ));
 
-        // ✅ CRITICAL: Required for cookies to work cross-origin
         config.setAllowCredentials(true);
-
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(List.of("*"));
-        config.setExposedHeaders(List.of("X-CSRF-TOKEN"));
+        config.setExposedHeaders(List.of("Authorization")); // ✅ Expose Bearer token in response
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", config);
@@ -102,51 +103,44 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http, UserRepository userRepository) throws Exception {
 
-        // ✅ FIXED: Create JWT filter with UserRepository
         JwtAuthenticationFilter jwtFilter = new JwtAuthenticationFilter(
                 jwtProvider,
                 userDetailsService,
                 blacklistService,
                 cookieUtil,
-                userRepository  // ✅ ADDED
+                userRepository
         );
 
-        // ✅ CSRF configuration
-        CsrfTokenRequestAttributeHandler requestHandler = new CsrfTokenRequestAttributeHandler();
-        requestHandler.setCsrfRequestAttributeName("_csrf");
-
         http
-                .csrf(csrf -> csrf
-                        .csrfTokenRepository(CookieCsrfTokenRepository. withHttpOnlyFalse())
-                        .csrfTokenRequestHandler(requestHandler)
-                        .ignoringRequestMatchers(
-                                "/auth/login",
-                                "/auth/register",
-                                "/auth/public-key",
-                                "/swagger-ui/**",
-                                "/v3/api-docs/**"
-                        )
-                )
-                .cors(cors -> cors.configurationSource(corsConfigurationSource()))
-                .sessionManagement(session ->
-                        session.sessionCreationPolicy(SessionCreationPolicy. STATELESS)
+                // ✅ CSRF disabled - using SameSite cookies + Bearer tokens
+                .csrf(csrf -> csrf.disable())
+
+                . cors(cors -> cors.configurationSource(corsConfigurationSource()))
+
+                . sessionManagement(session ->
+                        session.sessionCreationPolicy(SessionCreationPolicy.STATELESS)
                 )
                 .authorizeHttpRequests(auth -> auth
-                        . requestMatchers(
+                        // Public endpoints
+                        .requestMatchers(
                                 "/auth/register",
                                 "/auth/login",
                                 "/auth/public-key",
                                 "/swagger-ui/**",
                                 "/v3/api-docs/**"
                         ).permitAll()
+
+                        // Authenticated endpoints
                         .requestMatchers("/auth/refresh", "/auth/logout").authenticated()
+                        . requestMatchers("/api/user/**").authenticated()
+
+                        // Role-based endpoints
                         .requestMatchers("/admin/**").hasRole("ADMIN")
                         . requestMatchers("/moderation/**").hasAnyRole("ADMIN", "MODERATOR")
-                        .anyRequest().authenticated()
+
+                        . anyRequest().authenticated()
                 )
                 .authenticationProvider(authenticationProvider())
-                .addFilterBefore(new CsrfCookieFilter(),
-                        org.springframework.security.web.csrf.CsrfFilter.class)
                 .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();

@@ -10,10 +10,17 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * ✅ INSTAGRAM-STYLE User Controller
+ * ✅ IDENTITY SERVICE ONLY
  *
- * Endpoints for authenticated users (NOT role-based).
- * Business logic enforced via flags, not roles.
+ * Responsibilities:
+ *  - Return authenticated user account info
+ *  - Check user permissions
+ *  - Test authentication
+ *
+ * Does NOT handle:
+ *  - Posts → Post Service
+ *  - Profiles → Profile Service
+ *  - Follows → Follow Service
  */
 @RestController
 @RequestMapping("/api/user")
@@ -26,8 +33,7 @@ public class UserController {
     }
 
     /**
-     * Get current user's profile.
-     * Any authenticated user can access this.
+     * ✅ KEEP - Get authenticated user's account info
      */
     @GetMapping("/me")
     public Map<String, Object> getCurrentUser(@AuthenticationPrincipal UserDetails userDetails) {
@@ -35,71 +41,66 @@ public class UserController {
         User user = userRepository.findByUsername(userDetails.getUsername())
                 .orElseThrow(() -> new RuntimeException("User not found"));
 
-        Map<String, Object> profile = new HashMap<>();
-        profile.put("id", user.getId());
-        profile.put("username", user.getUsername());
-        profile.put("fullName", user.getFullName());
-        profile.put("email", user.getEmail());
-        profile.put("bio", user.getBio());
-        profile.put("profilePictureUrl", user.getProfilePictureUrl());
-        profile.put("accountType", user.getAccountType());
-        profile.put("verified", user.isVerified());
-        profile.put("privateAccount", user.isPrivateAccount());
-        profile.put("twoFactorEnabled", user.isTwoFactorEnabled());
-        profile.put("emailVerified", user.isEmailVerified());
+        Map<String, Object> account = new HashMap<>();
+        account.put("id", user.getId());
+        account.put("username", user.getUsername());
+        account.put("fullName", user.getFullName());
+        account.put("email", user.getEmail());
+        account.put("accountType", user.getAccountType());
+        account.put("verified", user.isVerified());
+        account.put("privateAccount", user.isPrivateAccount());
+        account.put("twoFactorEnabled", user.isTwoFactorEnabled());
+        account.put("emailVerified", user.isEmailVerified());
 
-        return profile;
+        // Permission flags (used by other services)
+        account.put("canPost", user.isCanPost());
+        account.put("canComment", user.isCanComment());
+        account.put("canMessage", user.isCanMessage());
+        account.put("shadowBanned", user.isShadowBanned());
+        account.put("suspended", user.isSuspended());
+
+        return account;
     }
 
     /**
-     * Example: Create post endpoint.
-     * ✅ FLAG-BASED authorization (not role-based).
+     * ✅ KEEP - Test authentication
      */
-    @PostMapping("/posts")
-    public Map<String, String> createPost(@AuthenticationPrincipal UserDetails userDetails,
-                                          @RequestBody Map<String, String> postData) {
+    @GetMapping("/test-auth")
+    public Map<String, Object> testAuth(@AuthenticationPrincipal UserDetails userDetails) {
+        Map<String, Object> response = new HashMap<>();
 
-        User user = userRepository.findByUsername(userDetails.getUsername())
-                .orElseThrow(() -> new RuntimeException("User not found"));
-
-        // ✅ INSTAGRAM-STYLE: Check flags, NOT roles
-        if (! user.isCanPost()) {
-            throw new RuntimeException("You cannot post at this time");
+        if (userDetails == null) {
+            response.put("authenticated", false);
+            response.put("message", "No authentication found");
+        } else {
+            response.put("authenticated", true);
+            response.put("username", userDetails.getUsername());
+            response.put("authorities", userDetails.getAuthorities());
         }
 
-        if (user.isShadowBanned()) {
-            // Post accepted but marked as shadow banned
-            // (actual implementation would mark in post service)
-        }
-
-        // ...  create post logic ...
-
-        Map<String, String> response = new HashMap<>();
-        response.put("message", "Post created successfully");
         return response;
     }
 
     /**
-     * Example: Comment on post.
-     * ✅ FLAG-BASED authorization.
+     * ✅ NEW - Get user permissions
+     *
+     * Called by Post Service to check if user can post/comment.
+     * This is the ONLY way other services should check permissions.
      */
-    @PostMapping("/posts/{postId}/comments")
-    public Map<String, String> addComment(@AuthenticationPrincipal UserDetails userDetails,
-                                          @PathVariable String postId,
-                                          @RequestBody Map<String, String> commentData) {
-
+    @GetMapping("/permissions")
+    public Map<String, Object> getUserPermissions(@AuthenticationPrincipal UserDetails userDetails) {
         User user = userRepository.findByUsername(userDetails.getUsername())
                 .orElseThrow(() -> new RuntimeException("User not found"));
 
-        // ✅ Check canComment flag
-        if (!user.isCanComment()) {
-            throw new RuntimeException("You cannot comment at this time");
-        }
+        Map<String, Object> permissions = new HashMap<>();
+        permissions.put("userId", user.getId());
+        permissions.put("username", user.getUsername());
+        permissions.put("canPost", user.isCanPost());
+        permissions.put("canComment", user.isCanComment());
+        permissions.put("canMessage", user.isCanMessage());
+        permissions.put("suspended", user.isSuspended());
+        permissions.put("shadowBanned", user.isShadowBanned());
 
-        // ... add comment logic ...
-
-        Map<String, String> response = new HashMap<>();
-        response.put("message", "Comment added");
-        return response;
+        return permissions;
     }
 }
