@@ -17,6 +17,7 @@
         <module>identity-service</module>
         <module>api-gateway</module>
         <module>profile-service</module>
+        <module>service-registry</module>
     </modules>
 
     <!--

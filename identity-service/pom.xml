@@ -74,6 +74,10 @@
             <optional>true</optional>
         </dependency>
 
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+        </dependency>
         <!-- JAXB (needed for Java 17) -->
         <dependency>
             <groupId>jakarta.xml.bind</groupId>
