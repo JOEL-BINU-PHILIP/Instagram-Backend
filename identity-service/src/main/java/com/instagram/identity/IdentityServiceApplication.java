@@ -1,5 +1,9 @@
 package com.instagram.identity;
 
+import com.instagram.identity.model.Role;
+import com.instagram.identity.repository.RoleRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
@@ -12,10 +16,29 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  *  - Auto-configuration for needed components
  */
 @SpringBootApplication
-public class IdentityServiceApplication {
+public class IdentityServiceApplication implements CommandLineRunner {
+
+    @Autowired
+    private RoleRepository roleRepository;
 
     public static void main(String[] args) {
-        // This starts the entire Spring Boot application.
         SpringApplication.run(IdentityServiceApplication.class, args);
+    }
+
+    @Override
+    public void run(String... args) {
+        // Ensure required roles exist
+        ensureRoleExists("ROLE_USER");
+        ensureRoleExists("ROLE_ADMIN");
+        ensureRoleExists("ROLE_MODERATOR");
+    }
+
+    private void ensureRoleExists(String roleName) {
+        if (roleRepository.findByName(roleName).isEmpty()) {
+            Role role = new Role();
+            role.setName(roleName);
+            roleRepository.save(role);
+            System.out.println("✅ Created role: " + roleName);
+        }
     }
 }

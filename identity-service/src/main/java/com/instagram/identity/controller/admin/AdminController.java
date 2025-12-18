@@ -1,129 +1,106 @@
-package com.instagram.identity.controller.admin;
+package com.instagram.identity.controller. admin;
 
-import com.instagram.identity.scheduler.TokenCleanupScheduler;
-import com.instagram.identity.service.TokenBlacklistService;
-import com.instagram.identity.repository.UserRepository;
-import org.springframework.web.bind.annotation.*;
+import com.instagram. identity.model.User;
+import com.instagram.identity.service.UserService;
+import com. instagram.identity.repository.UserRepository;
+import org. springframework.web.bind.annotation.*;
 
+import java.time.Instant;
+import java. time.temporal.ChronoUnit;
 import java.util.HashMap;
 import java.util.Map;
 
 /**
- * This controller contains endpoints that ONLY ADMIN users can access.
+ * ✅ INSTAGRAM-STYLE Admin Controller
  *
- * Access control is configured inside SecurityConfig:
- *    . requestMatchers("/admin/**").hasRole("ADMIN")
- *
- * ✅ IMPROVEMENT: Added monitoring and management endpoints for admins.
+ * ONLY accessible by ROLE_ADMIN.
+ * Used for user management, not business logic.
  */
 @RestController
 @RequestMapping("/admin")
 public class AdminController {
 
-    private final TokenBlacklistService blacklistService;
-    private final TokenCleanupScheduler cleanupScheduler;
+    private final UserService userService;
     private final UserRepository userRepository;
 
-    public AdminController(TokenBlacklistService blacklistService,
-                           TokenCleanupScheduler cleanupScheduler,
-                           UserRepository userRepository) {
-        this.blacklistService = blacklistService;
-        this.cleanupScheduler = cleanupScheduler;
-        this.userRepository = userRepository;
+    public AdminController(UserService userService, UserRepository userRepository) {
+        this.userService = userService;
+        this. userRepository = userRepository;
     }
 
     /**
-     * A simple protected admin endpoint.
-     * If you can see this response, your JWT token has ROLE_ADMIN.
+     * Suspend a user.
      */
-    @GetMapping("/dashboard")
-    public String adminDashboard() {
-        return "Admin Dashboard (Admin role required)";
+    @PostMapping("/users/{userId}/suspend")
+    public Map<String, String> suspendUser(@PathVariable String userId,
+                                           @RequestBody Map<String, String> request) {
+
+        String reason = request.getOrDefault("reason", "Policy violation");
+        Integer durationDays = request.get("durationDays") != null
+                ? Integer.parseInt(request.get("durationDays"))
+                : null;
+
+        Instant expiresAt = durationDays != null
+                ? Instant.now().plus(durationDays, ChronoUnit. DAYS)
+                : null;
+
+        userService.suspendUser(userId, reason, expiresAt);
+
+        Map<String, String> response = new HashMap<>();
+        response.put("message", "User suspended");
+        response.put("reason", reason);
+        return response;
     }
 
     /**
-     * ✅ NEW: Get system health statistics.
-     * Shows current state of authentication system.
+     * Unsuspend a user.
      */
-    @GetMapping("/stats")
-    public Map<String, Object> getSystemStats() {
-        Map<String, Object> stats = new HashMap<>();
+    @PostMapping("/users/{userId}/unsuspend")
+    public Map<String, String> unsuspendUser(@PathVariable String userId) {
+        userService.unsuspendUser(userId);
 
-        // Token statistics
-        stats.put("blacklistedTokensCount", blacklistService.getBlacklistSize());
-
-        // User statistics
-        stats. put("totalUsers", userRepository.count());
-
-        // System info
-        stats.put("serverStatus", "Running");
-        stats.put("authenticationMethod", "JWT with RS256");
-
-        return stats;
+        Map<String, String> response = new HashMap<>();
+        response.put("message", "User unsuspended");
+        return response;
     }
 
     /**
-     * ✅ NEW: Get detailed blacklist information.
-     * Useful for monitoring and debugging token issues.
+     * Restrict posting ability.
      */
-    @GetMapping("/tokens/blacklist")
-    public Map<String, Object> getBlacklistInfo() {
-        Map<String, Object> info = new HashMap<>();
+    @PostMapping("/users/{userId}/restrict-posting")
+    public Map<String, String> restrictPosting(@PathVariable String userId) {
+        userService.updateContentPermissions(userId, false, true, true);
 
-        info.put("blacklistedTokensCount", blacklistService.getBlacklistSize());
-        info.put("description", "Tokens that have been logged out but not yet expired");
-        info.put("cleanupSchedule", "Runs every hour to remove naturally expired tokens");
-
-        return info;
+        Map<String, String> response = new HashMap<>();
+        response.put("message", "Posting restricted");
+        return response;
     }
 
     /**
-     * ✅ NEW:  Manually trigger token cleanup.
-     * Useful for testing or immediate cleanup without waiting for scheduler.
+     * Get user details (admin view).
      */
-    @PostMapping("/tokens/cleanup")
-    public Map<String, Object> triggerManualCleanup() {
-        int sizeBefore = blacklistService.getBlacklistSize();
+    @GetMapping("/users/{userId}")
+    public Map<String, Object> getUserDetails(@PathVariable String userId) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("User not found"));
 
-        // Force cleanup immediately
-        cleanupScheduler.forceCleanup();
+        Map<String, Object> details = new HashMap<>();
+        details.put("id", user.getId());
+        details.put("username", user.getUsername());
+        details.put("email", user.getEmail());
+        details.put("accountType", user.getAccountType());
+        details.put("suspended", user.isSuspended());
+        details.put("shadowBanned", user.isShadowBanned());
+        details.put("canPost", user.isCanPost());
+        details.put("canComment", user.isCanComment());
+        details.put("verified", user.isVerified());
+        details.put("lastLoginAt", user.getLastLoginAt());
 
-        int sizeAfter = blacklistService.getBlacklistSize();
-        int removed = sizeBefore - sizeAfter;
+        if (user.isSuspended()) {
+            details.put("suspensionReason", user.getSuspensionReason());
+            details.put("suspensionExpiresAt", user.getSuspensionExpiresAt());
+        }
 
-        Map<String, Object> result = new HashMap<>();
-        result.put("message", "Manual cleanup completed");
-        result.put("tokensRemoved", removed);
-        result.put("remainingTokens", sizeAfter);
-
-        return result;
-    }
-
-    /**
-     * ✅ NEW: Get all users count by role.
-     * Useful for monitoring user distribution.
-     */
-    @GetMapping("/users/stats")
-    public Map<String, Object> getUserStats() {
-        Map<String, Object> stats = new HashMap<>();
-
-        long totalUsers = userRepository.count();
-        stats.put("totalUsers", totalUsers);
-        stats.put("description", "Total registered users in the system");
-
-        return stats;
-    }
-
-    /**
-     * ✅ NEW: Health check endpoint.
-     * Returns 200 OK if admin service is running properly.
-     */
-    @GetMapping("/health")
-    public Map<String, String> healthCheck() {
-        Map<String, String> health = new HashMap<>();
-        health.put("status", "UP");
-        health.put("service", "Admin Controller");
-        health.put("message", "All admin endpoints are operational");
-        return health;
+        return details;
     }
 }

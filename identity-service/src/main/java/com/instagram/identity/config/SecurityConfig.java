@@ -1,5 +1,6 @@
 package com.instagram.identity.config;
 
+import com.instagram.identity.repository.UserRepository;
 import com.instagram.identity.security.CsrfCookieFilter;
 import com. instagram.identity.security.CustomUserDetailsService;
 import com. instagram.identity.security.JwtAuthenticationFilter;
@@ -99,26 +100,25 @@ public class SecurityConfig {
      * ✅ MAIN SECURITY CONFIGURATION
      */
     @Bean
-    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+    public SecurityFilterChain filterChain(HttpSecurity http, UserRepository userRepository) throws Exception {
 
-        // ✅ Create JWT filter with cookie support
+        // ✅ FIXED: Create JWT filter with UserRepository
         JwtAuthenticationFilter jwtFilter = new JwtAuthenticationFilter(
                 jwtProvider,
                 userDetailsService,
                 blacklistService,
-                cookieUtil
+                cookieUtil,
+                userRepository  // ✅ ADDED
         );
 
-        // ✅ CSRF configuration (Instagram-style)
+        // ✅ CSRF configuration
         CsrfTokenRequestAttributeHandler requestHandler = new CsrfTokenRequestAttributeHandler();
         requestHandler.setCsrfRequestAttributeName("_csrf");
 
         http
-                // ✅ ENABLE CSRF with cookie-based tokens
                 .csrf(csrf -> csrf
-                        .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
-                        . csrfTokenRequestHandler(requestHandler)
-                        // ✅ Disable CSRF ONLY for login/register (stateless operations)
+                        .csrfTokenRepository(CookieCsrfTokenRepository. withHttpOnlyFalse())
+                        .csrfTokenRequestHandler(requestHandler)
                         .ignoringRequestMatchers(
                                 "/auth/login",
                                 "/auth/register",
@@ -127,44 +127,26 @@ public class SecurityConfig {
                                 "/v3/api-docs/**"
                         )
                 )
-
-                // ✅ CORS with credentials support
-                .cors(cors -> cors. configurationSource(corsConfigurationSource()))
-
-                // ✅ Stateless sessions (JWT-based)
+                .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .sessionManagement(session ->
                         session.sessionCreationPolicy(SessionCreationPolicy. STATELESS)
                 )
-
-                // ✅ Authorization rules
                 .authorizeHttpRequests(auth -> auth
-                        // Public endpoints
-                        .requestMatchers(
+                        . requestMatchers(
                                 "/auth/register",
                                 "/auth/login",
                                 "/auth/public-key",
                                 "/swagger-ui/**",
                                 "/v3/api-docs/**"
                         ).permitAll()
-
-                        // Protected endpoints (require CSRF token)
                         .requestMatchers("/auth/refresh", "/auth/logout").authenticated()
-
-                        // Role-based access
                         .requestMatchers("/admin/**").hasRole("ADMIN")
-                        .requestMatchers("/seller/**").hasRole("SELLER")
-                        .requestMatchers("/buyer/**").hasRole("BUYER")
-
-                        . anyRequest().authenticated()
+                        . requestMatchers("/moderation/**").hasAnyRole("ADMIN", "MODERATOR")
+                        .anyRequest().authenticated()
                 )
-
-                . authenticationProvider(authenticationProvider())
-
-                // Add CSRF cookie filter BEFORE Spring Security's CSRF filter
+                .authenticationProvider(authenticationProvider())
                 .addFilterBefore(new CsrfCookieFilter(),
                         org.springframework.security.web.csrf.CsrfFilter.class)
-
-                // Add JWT filter
                 .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();

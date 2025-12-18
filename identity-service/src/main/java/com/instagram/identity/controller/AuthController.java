@@ -54,7 +54,8 @@ public class AuthController {
                 request.username(),
                 request.email(),
                 request.password(),
-                request. role()
+                request.fullName(),
+                request.accountType()  // This can be null, defaults to PERSONAL
         );
 
         Map<String, String> response = new HashMap<>();
@@ -64,13 +65,45 @@ public class AuthController {
     }
 
     /**
-     * ✅ FIXED: Use getTokenHash() instead of getToken()
+     * ✅ INSTAGRAM-STYLE LOGIN
+     *
+     * Changes:
+     *  1. Reject suspended users BEFORE issuing tokens
+     *  2. Reject login-restricted users
+     *  3. Record last login timestamp
+     *  4. Return suspension reason if applicable
      */
     @PostMapping("/login")
     public Map<String, Object> login(@Valid @RequestBody LoginRequest request,
                                      HttpServletRequest httpRequest,
                                      HttpServletResponse response) throws Exception {
 
+        // ✅ STEP 1: Fetch user first to check flags
+        User user = userService. findByUsername(request.username())
+                .orElseThrow(() -> new RuntimeException("Invalid username or password"));
+
+        // ✅ STEP 2: Check if user CAN authenticate
+        if (user.isSuspended()) {
+            String reason = user.getSuspensionReason() != null
+                    ? user.getSuspensionReason()
+                    : "Your account has been suspended";
+
+            Map<String, Object> error = new HashMap<>();
+            error.put("error", "account_suspended");
+            error.put("message", reason);
+
+            if (user.getSuspensionExpiresAt() != null) {
+                error. put("expiresAt", user.getSuspensionExpiresAt().toString());
+            }
+
+            throw new RuntimeException(error.toString());
+        }
+
+        if (user.isLoginRestricted()) {
+            throw new RuntimeException("Login restricted - please verify your identity via email");
+        }
+
+        // ✅ STEP 3: NOW authenticate credentials
         Authentication authentication = authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(
                         request.username(),
@@ -80,28 +113,29 @@ public class AuthController {
 
         SecurityContextHolder.getContext().setAuthentication(authentication);
 
-        User user = userService.findByUsername(request.username())
-                .orElseThrow(() -> new RuntimeException("User not found"));
-
+        // ✅ STEP 4: Generate tokens
         String accessToken = jwtProvider.generateAccessToken(user);
 
-        // ✅ Get client metadata
         String ipAddress = getClientIP(httpRequest);
         String userAgent = httpRequest.getHeader("User-Agent");
 
-        // ✅ Create refresh token with tracking
         RefreshToken refreshToken = refreshTokenService.createToken(user, ipAddress, userAgent);
 
-        // ✅ FIXED: Use getTokenHash() - service returns raw token here
         response.addCookie(cookieUtil.createAccessTokenCookie(accessToken, 15 * 60));
         response.addCookie(cookieUtil.createRefreshTokenCookie(
-                refreshToken.getTokenHash(),  // ✅ FIXED - contains raw token
+                refreshToken.getTokenHash(),
                 14 * 24 * 60 * 60
         ));
 
+        // ✅ STEP 5: Record login
+        userService.recordLogin(user.getId());
+
+        // ✅ STEP 6: Return user info
         Map<String, Object> result = new HashMap<>();
         result.put("message", "Login successful");
         result.put("username", user.getUsername());
+        result.put("accountType", user.getAccountType().toString());
+        result.put("verified", user.isVerified());
         result.put("roles", user.getRoles().stream().map(Role::getName).toList());
 
         return result;
