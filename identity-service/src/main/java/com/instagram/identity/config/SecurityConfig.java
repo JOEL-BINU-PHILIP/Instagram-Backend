@@ -1,9 +1,11 @@
 package com.instagram.identity.config;
 
-import com.instagram.identity.security.CustomUserDetailsService;
-import com.instagram.identity.security.JwtAuthenticationFilter;
-import com.instagram.identity.security.JwtProvider;
-import com.instagram.identity.service.TokenBlacklistService;  // ✅ NEW
+import com.instagram.identity.security.CsrfCookieFilter;
+import com. instagram.identity.security.CustomUserDetailsService;
+import com. instagram.identity.security.JwtAuthenticationFilter;
+import com. instagram.identity.security.JwtProvider;
+import com.instagram. identity.service.TokenBlacklistService;
+import com.instagram.identity.util.CookieUtil;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.authentication.AuthenticationManager;
@@ -13,14 +15,25 @@ import org.springframework.security.config. Customizer;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
-import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.crypto. password. PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
-import org. springframework.security.web.authentication. UsernamePasswordAuthenticationFilter;
+import org.springframework. security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
+import org.springframework.security. web.csrf.CsrfTokenRequestAttributeHandler;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+
+import java.util.List;
 
 /**
- * This class configures the entire Spring Security layer.
+ * UPGRADED: Instagram-style security configuration.
  *
- * ✅ IMPROVEMENT: Now integrates TokenBlacklistService to reject logged-out tokens.
+ * Key changes:
+ *  1. CSRF protection enabled (cookie-based)
+ *  2.  CORS configured for credentials (cookies)
+ *  3. JWT filter reads from cookies
+ *  4. Stateless session management preserved
  */
 @Configuration
 public class SecurityConfig {
@@ -28,95 +41,130 @@ public class SecurityConfig {
     private final CustomUserDetailsService userDetailsService;
     private final PasswordEncoder passwordEncoder;
     private final JwtProvider jwtProvider;
-    private final TokenBlacklistService blacklistService;  // ✅ NEW
+    private final TokenBlacklistService blacklistService;
+    private final CookieUtil cookieUtil;
 
-    public SecurityConfig(CustomUserDetailsService uds,
+    public SecurityConfig(CustomUserDetailsService userDetailsService,
                           PasswordEncoder passwordEncoder,
                           JwtProvider jwtProvider,
-                          TokenBlacklistService blacklistService) {  // ✅ NEW
-
-        this.userDetailsService = uds;
-        this.passwordEncoder = passwordEncoder;
+                          TokenBlacklistService blacklistService,
+                          CookieUtil cookieUtil) {
+        this.userDetailsService = userDetailsService;
+        this. passwordEncoder = passwordEncoder;
         this.jwtProvider = jwtProvider;
-        this.blacklistService = blacklistService;  // ✅ NEW
+        this.blacklistService = blacklistService;
+        this.cookieUtil = cookieUtil;
     }
 
-    /**
-     * This configures how username/password authentication works.
-     *
-     * Internally, Spring will use:
-     *  - our UserDetailsService to fetch users from DB
-     *  - our PasswordEncoder to check hashed passwords
-     */
     @Bean
     public AuthenticationProvider authenticationProvider() {
         DaoAuthenticationProvider provider = new DaoAuthenticationProvider();
-
-        provider.setUserDetailsService(userDetailsService); // load user from DB
-        provider.setPasswordEncoder(passwordEncoder);       // compare hashed passwords
-
+        provider.setUserDetailsService(userDetailsService);
+        provider.setPasswordEncoder(passwordEncoder);
         return provider;
     }
 
-    /**
-     * AuthenticationManager is the main object used during login.
-     * Spring automatically wires all authentication providers into it.
-     */
     @Bean
     public AuthenticationManager authenticationManager(AuthenticationConfiguration config) throws Exception {
         return config. getAuthenticationManager();
     }
 
     /**
-     * ✅ IMPROVED:  This configures HTTP security with blacklist support.
-     *  - disable CSRF (not needed for APIs)
-     *  - allow public access to /auth/** endpoints
-     *  - require specific roles for admin/buyer/seller routes
-     *  - add our JWT filter with blacklist checking
+     * ✅ CORS configuration that allows credentials (cookies).
+     *
+     * CRITICAL for cookie-based auth:
+     *  - allowCredentials = true
+     *  - allowedOrigins must be specific (cannot use "*")
+     */
+    @Bean
+    public CorsConfigurationSource corsConfigurationSource() {
+        CorsConfiguration config = new CorsConfiguration();
+
+        // ✅ Allow specific origins (NOT "*" when using credentials)
+        config.setAllowedOrigins(List.of("http://localhost:3000", "https://yourdomain.com"));
+
+        // ✅ CRITICAL: Required for cookies to work cross-origin
+        config.setAllowCredentials(true);
+
+        config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+        config.setAllowedHeaders(List.of("*"));
+        config.setExposedHeaders(List.of("X-CSRF-TOKEN"));
+
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", config);
+        return source;
+    }
+
+    /**
+     * ✅ MAIN SECURITY CONFIGURATION
      */
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
 
-        // ✅ Create JWT filter WITH blacklist service
+        // ✅ Create JWT filter with cookie support
         JwtAuthenticationFilter jwtFilter = new JwtAuthenticationFilter(
                 jwtProvider,
                 userDetailsService,
-                blacklistService  // ✅ NEW:  Now filter checks blacklist
+                blacklistService,
+                cookieUtil
         );
 
-        http
-                .csrf(csrf -> csrf. disable())   // APIs don't use CSRF tokens
-                .cors(Customizer.withDefaults()) // allow cross-origin requests
+        // ✅ CSRF configuration (Instagram-style)
+        CsrfTokenRequestAttributeHandler requestHandler = new CsrfTokenRequestAttributeHandler();
+        requestHandler.setCsrfRequestAttributeName("_csrf");
 
-                // Make application STATELESS (no server-side sessions)
-                .sessionManagement(session ->
-                        session.sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+        http
+                // ✅ ENABLE CSRF with cookie-based tokens
+                .csrf(csrf -> csrf
+                        .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
+                        . csrfTokenRequestHandler(requestHandler)
+                        // ✅ Disable CSRF ONLY for login/register (stateless operations)
+                        .ignoringRequestMatchers(
+                                "/auth/login",
+                                "/auth/register",
+                                "/auth/public-key",
+                                "/swagger-ui/**",
+                                "/v3/api-docs/**"
+                        )
                 )
 
-                . authorizeHttpRequests(auth -> auth
-                        // These endpoints DO NOT require authentication
+                // ✅ CORS with credentials support
+                .cors(cors -> cors. configurationSource(corsConfigurationSource()))
+
+                // ✅ Stateless sessions (JWT-based)
+                .sessionManagement(session ->
+                        session.sessionCreationPolicy(SessionCreationPolicy. STATELESS)
+                )
+
+                // ✅ Authorization rules
+                .authorizeHttpRequests(auth -> auth
+                        // Public endpoints
                         .requestMatchers(
                                 "/auth/register",
                                 "/auth/login",
-                                "/auth/refresh",
-                                "/auth/logout",
                                 "/auth/public-key",
-                                "/auth/blacklist/stats",  // ✅ NEW: monitor endpoint
                                 "/swagger-ui/**",
                                 "/v3/api-docs/**"
                         ).permitAll()
 
-                        // Role-based access control
-                        . requestMatchers("/admin/**").hasRole("ADMIN")
+                        // Protected endpoints (require CSRF token)
+                        .requestMatchers("/auth/refresh", "/auth/logout").authenticated()
+
+                        // Role-based access
+                        .requestMatchers("/admin/**").hasRole("ADMIN")
                         .requestMatchers("/seller/**").hasRole("SELLER")
                         .requestMatchers("/buyer/**").hasRole("BUYER")
 
-                        // Any other endpoint MUST be authenticated
-                        .anyRequest().authenticated()
+                        . anyRequest().authenticated()
                 )
+
                 . authenticationProvider(authenticationProvider())
 
-                // Add our JWT filter BEFORE the username/password filter runs
+                // Add CSRF cookie filter BEFORE Spring Security's CSRF filter
+                .addFilterBefore(new CsrfCookieFilter(),
+                        org.springframework.security.web.csrf.CsrfFilter.class)
+
+                // Add JWT filter
                 .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();

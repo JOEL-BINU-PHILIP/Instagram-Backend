@@ -34,7 +34,7 @@ import java.util.stream.Collectors;
  *   - private_key. pem (to sign tokens)
  *   - public_key.pem  (to verify tokens)
  *
- * ✅ IMPROVEMENT: Added helper methods to extract expiry time for blacklist management.
+ * IMPROVEMENT: Added helper methods to extract expiry time for blacklist management.
  */
 @Component
 public class JwtProvider {
@@ -197,7 +197,7 @@ public class JwtProvider {
     }
 
     /**
-     * ✅ NEW: Extract the expiry time from a JWT token.
+     * NEW: Extract the expiry time from a JWT token.
      * Used by blacklist service to know how long to keep token blacklisted.
      */
     public Instant getExpiryTimeFromToken(String token) {
