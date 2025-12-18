@@ -16,11 +16,7 @@
     <modules>
         <module>identity-service</module>
         <module>api-gateway</module>
-<!--        <module>user-service</module>-->
-<!--        <module>post-service</module>-->
-<!--        <module>feed-service</module>-->
-<!--        <module>notification-service</module>-->
-<!--        <module>shared</module>-->
+        <module>profile-service</module>
     </modules>
 
     <!--

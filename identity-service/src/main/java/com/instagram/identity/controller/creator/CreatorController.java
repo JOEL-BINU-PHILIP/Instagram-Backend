@@ -11,13 +11,13 @@ import org.springframework.web.bind.annotation.RestController;
  *    .requestMatchers("/seller/**").hasRole("SELLER")
  */
 @RestController
-@RequestMapping("/seller")
-public class SellerController {
+@RequestMapping("/creator")
+public class CreatorController {
 
     /**
      * Example protected endpoint for sellers.
      */
-    @GetMapping("/products")
+    @GetMapping("/promote")
     public String sellerProducts() {
         return "Seller Products (Seller role required)";
     }
