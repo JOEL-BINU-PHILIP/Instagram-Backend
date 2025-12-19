@@ -18,6 +18,7 @@
         <module>api-gateway</module>
         <module>profile-service</module>
         <module>service-registry</module>
+        <module>post-service</module>
     </modules>
 
     <!--

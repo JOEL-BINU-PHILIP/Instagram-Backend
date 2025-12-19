@@ -6,6 +6,8 @@
     <file url="file://$PROJECT_DIR$/identity-service/common/src/main/java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/identity-service/src/main/java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/identity-service/src/main/resources" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/post-service/src/main/java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/post-service/src/main/resources" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/profile-service/src/main/java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/profile-service/src/main/resources" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/service-registry/src/main/java" charset="UTF-8" />
